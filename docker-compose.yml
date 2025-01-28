@@ -1,0 +1,9 @@
+version: "3.8"
+
+services:
+  nlabot:
+    build: .
+    env_file: 
+      - .env
+    restart: always
+    container_name: nlabot_container
