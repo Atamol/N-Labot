@@ -1,9 +1,13 @@
-version: "3.8"
-
+version: '3.9'
 services:
-  nlabot:
+  N-Labot:
     build: .
-    env_file: 
+    image: python:3.9-slim
+    container_name: N-Labot
+    working_dir: /apps
+    volumes:
+      - ./apps:/apps
+    env_file:
       - .env
+    command: python /apps/bot.py
     restart: always
-    container_name: nlabot_container
