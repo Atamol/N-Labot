@@ -18,6 +18,7 @@ GMAIL_PASS = os.getenv("GMAIL_PASS")
 TARGET_SUBJECT = "Bambu Lab Verification Code"
 CODE_REGEX = re.compile(r"Your\s+verification\s+code\s+is:\s*(\d{6})", re.IGNORECASE)
 
+# サブスレッド上でIMAP IDLEを開始
 def start_gmail_detector(discord_bot: discord.Client, gmail_channel_id: int):
     th = threading.Thread(
         target=idle_loop,
@@ -26,59 +27,59 @@ def start_gmail_detector(discord_bot: discord.Client, gmail_channel_id: int):
     )
     th.start()
 
-# サブスレッド上でIMAP IDLEを起動
+# IMAP IDLEのループ
 def idle_loop(discord_bot: discord.Client, gmail_channel_id: int):
     while True:
         try:
             with IMAPClient("imap.gmail.com", ssl=True, use_uid=True) as server:
+                # ログイン
                 server.login(GMAIL_USER, GMAIL_PASS)
 
-                folders = server.list_folders()
-                all_mail_folder = None
-                for f in folders:
-                    folder_name = f[2]
-                    if "All Mail" in folder_name or "すべてのメール" in folder_name:
-                        all_mail_folder = folder_name
-                target_folder = all_mail_folder if all_mail_folder else "INBOX"
+                # "すべてのメール"を選択
+                target_folder = "[Gmail]/すべてのメール"
                 server.select_folder(target_folder)
+
+                # この箇所のみログを出力
                 print(f"[IMAP] IDLE start in folder: {target_folder}")
 
-                # IDLE開始 （最長1分待機）
+                # IDLE開始（最大60秒待機）
                 server.idle()
                 responses = server.idle_check(timeout=60)
                 server.idle_done()
 
                 # 新着の検知
                 if responses:
-                    fetch_latest_and_notify(server, discord_bot, gmail_channel_id)
                     print(f"[IMAP] mailbox update: {responses}")
+                    fetch_latest_and_notify(server, discord_bot, gmail_channel_id)
+
         except Exception as e:
             print(f"[ERROR] idle_loop: {e}")
 
         time.sleep(1)
 
-# 最新の10通を取得し，条件が合致するものから認証コードを抽出してDiscordへ送信
+# 最新5通を取得 → タイトルが"Bambu Lab Verification Code"のメールを取得 → 認証コードを抜き出してDiscordへ転送
 def fetch_latest_and_notify(server: IMAPClient, discord_bot: discord.Client, gmail_channel_id: int):
     all_uids = server.search(['ALL'])
     if not all_uids:
         return
 
     all_uids.sort()
-    last10 = all_uids[-10:]
-    data = server.fetch(last10, ['BODY[]'])
+    # 最新5通をチェック
+    last5 = all_uids[-5:]
+    data = server.fetch(last5, ['BODY[]'])
     if not data:
         return
 
     # 新しい順にチェック
-    for uid in reversed(last10):
+    for uid in reversed(last5):
         msg_info = data.get(uid)
         if not msg_info or (b'BODY[]' not in msg_info):
             continue
 
         raw_email = msg_info[b'BODY[]']
         msg = email.message_from_bytes(raw_email)
-        subject = decode_str(msg.get("Subject",""))
 
+        subject = decode_str(msg.get("Subject",""))
         if TARGET_SUBJECT in subject:
             body_text = get_body_text(msg)
             code = extract_code(body_text)
@@ -90,13 +91,14 @@ def fetch_latest_and_notify(server: IMAPClient, discord_bot: discord.Client, gma
                 )
                 break
 
+# 認証コードの転送
 async def send_discord_message(discord_bot: discord.Client, channel_id: int, code: str):
     channel = discord_bot.get_channel(channel_id)
     if channel:
-        await channel.send(f"Bambu Lab Verification Code: {code}")
+        await channel.send(f"Bambu Lab Verification Code: **{code}**")
 
-# メールヘッダのデコード
-def decode_str(s):
+#  メールヘッダのデコード
+def decode_str(s: str) -> str:
     parts = decode_header(s)
     decoded = []
     for text, enc in parts:
@@ -109,8 +111,9 @@ def decode_str(s):
             decoded.append(text)
     return "".join(decoded)
 
-# メール本文を結合
-def get_body_text(msg: email.message.Message):
+
+# text/plain と text/html を結合して返す
+def get_body_text(msg: email.message.Message) -> str:
     texts = []
     if msg.is_multipart():
         for part in msg.walk():
@@ -123,13 +126,14 @@ def get_body_text(msg: email.message.Message):
         payload = msg.get_payload(decode=True)
         if payload:
             texts.append(payload.decode(errors="replace"))
+
     return "\n\n".join(texts)
 
-# HTMLをテキスト化
-def extract_code(html_text: str):
+# コードを抽出
+def extract_code(html_text: str) -> str:
     soup = BeautifulSoup(html_text, "html.parser")
     text = soup.get_text()
     match = CODE_REGEX.search(text)
     if match:
         return match.group(1)
-    return None
+    return ""
