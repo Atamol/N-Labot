@@ -15,6 +15,7 @@ BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 TEMP_CHANNEL_ID = int(os.getenv("TEMP_CHANNEL_ID", "0"))
 GMAIL_CHANNEL_ID = int(os.getenv("GMAIL_CHANNEL_ID", "0"))
 TEST_CHANNEL_ID = int(os.getenv("TEST_CHANNEL_ID", "0"))
+
 THRESHOLD_TEMP = 5.0
 
 intents = discord.Intents.default()
@@ -61,7 +62,7 @@ class DiscordBot(discord.Client):
         new_state = "BELOW" if temp <= THRESHOLD_TEMP else "ABOVE"
         if getattr(self, "temp_state", None) is None:
             self.temp_state = new_state
-            print(f"初回チェック: temp_state={self.temp_state}, temp={temp}")
+            print(f"Switchbot動作チェック: temp_state={self.temp_state}, temp={temp}")
             return
 
         if new_state != self.temp_state:
@@ -73,6 +74,7 @@ class DiscordBot(discord.Client):
 
 bot = DiscordBot(intents=intents)
 
+# Switchbotコマンド
 @bot.tree.command(name="status", description="現在の温湿度とバッテリーを表示")
 async def meterstatus_command(interaction: discord.Interaction):
     meter_data = switchbot.get_meter_status()
