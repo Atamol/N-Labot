@@ -1,5 +1,9 @@
+python-dotenv
 discord.py
 imapclient
-beautifulsoup4
 requests
-python-dotenv
+beautifulsoup4
+Pillow
+matplotlib
+numpy
+pytz
