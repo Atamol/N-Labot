@@ -12,7 +12,6 @@ import discord
 
 GMAIL_USER = os.getenv("GMAIL_USER")
 GMAIL_PASS = os.getenv("GMAIL_PASS")
-GMAIL_CHANNEL_ID = int(os.getenv("GMAIL_CHANNEL_ID", "0"))
 
 TARGET_SUBJECT = "Bambu Lab Verification Code"
 CODE_REGEX = re.compile(r"Your\s+verification\s+code\s+is:\s*(\d{6})", re.IGNORECASE)
