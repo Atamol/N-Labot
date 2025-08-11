@@ -9,7 +9,7 @@ import asyncio
 
 import switchbot
 import gmail_detector
-from reservation import init_reservations
+# from reservation import init_reservations
 
 BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 TEMP_CHANNEL_ID = int(os.getenv("TEMP_CHANNEL_ID", "0"))
@@ -37,7 +37,7 @@ class DiscordBot(discord.Client):
         gmail_detector.start_gmail_detector(self, GMAIL_CHANNEL_ID)
     
         # 予約機能の初期化
-        await init_reservations(self)
+#        await init_reservations(self)
     
         # sync
         synced = await self.tree.sync()

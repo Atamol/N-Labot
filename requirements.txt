@@ -3,7 +3,8 @@ discord.py
 imapclient
 requests
 beautifulsoup4
-Pillow
-matplotlib
-numpy
-pytz
+
+# Pillow
+# matplotlib
+# numpy
+# pytz
