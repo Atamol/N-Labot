@@ -7,10 +7,7 @@ services:
     working_dir: /apps
     volumes:
       - ./apps:/apps
-      - bot_data:/data
     env_file:
       - .env
     command: python /apps/bot.py
     restart: always
-volumes:
-  bot_data:
