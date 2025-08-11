@@ -1,8 +1,8 @@
-version: '3.9'
+version: '3.13'
 services:
   N-Labot:
     build: .
-    image: python:3.9-slim
+    image: python:3.13-slim
     container_name: N-Labot
     working_dir: /apps
     volumes:
