@@ -18,8 +18,32 @@ CODE_REGEX = re.compile(r"Your\s+verification\s+code\s+is:\s*(\d{6})", re.IGNORE
 
 # 前回処理済みのUIDを保持
 LAST_PROCESSED_UID = 0
+UID_FILE = os.getenv("GMAIL_UID_FILE", "last_uid.txt")
+
+
+def load_last_uid():
+    #起動時に前回UIDを復元（なければ0）
+    global LAST_PROCESSED_UID
+    try:
+        with open(UID_FILE, "r") as f:
+            LAST_PROCESSED_UID = int(f.read().strip())
+            print(f"[IMAP] restored LAST_PROCESSED_UID={LAST_PROCESSED_UID}")
+    except Exception:
+        LAST_PROCESSED_UID = 0
+
+
+def save_last_uid():
+    # 処理後に最新UIDを保存
+    try:
+        with open(UID_FILE, "w") as f:
+            f.write(str(LAST_PROCESSED_UID))
+    except Exception as e:
+        print(f"[IMAP] save uid failed: {e}")
+
 
 def start_gmail_detector(discord_bot: discord.Client, gmail_channel_id: int):
+    # 起動時に前回UIDを復元
+    load_last_uid()
     th = threading.Thread(
         target=idle_loop,
         args=(discord_bot, gmail_channel_id),
@@ -39,8 +63,6 @@ def idle_loop(discord_bot: discord.Client, gmail_channel_id: int):
                 target_folder = "[Gmail]/すべてのメール"
                 server.select_folder(target_folder)
 
-                print(f"[IMAP] Polling folder: {target_folder}")
-
                 # 新着メールの検出と処理
                 fetch_latest_and_notify(server, discord_bot, gmail_channel_id)
         except Exception as e:
@@ -50,19 +72,14 @@ def idle_loop(discord_bot: discord.Client, gmail_channel_id: int):
 
 def fetch_latest_and_notify(server: IMAPClient, discord_bot: discord.Client, gmail_channel_id: int):
     global LAST_PROCESSED_UID
-    all_uids = server.search(['ALL'])
-    if not all_uids:
+    # 前回UID+1から最新までの差分だけ取得
+    uids = server.search(['UID', f'{LAST_PROCESSED_UID + 1}:*'])
+    if not uids:
         return
 
-    all_uids.sort()
-    # 前回処理済みのUIDより大きいものを新着メールとする
-    new_uids = [uid for uid in all_uids if uid > LAST_PROCESSED_UID]
-    if not new_uids:
-        return
-
-    # 最新10件のUIDを取得
-    if len(new_uids) > 10:
-        new_uids = new_uids[-10:]
+    uids.sort()
+    # 最新10件に制限
+    new_uids = uids[-10:]
 
     # 新しい順に処理
     for uid in reversed(new_uids):
@@ -85,8 +102,9 @@ def fetch_latest_and_notify(server: IMAPClient, discord_bot: discord.Client, gma
                 )
                 break
 
-    # 最新のUIDを記録
+    # 最大UIDを記録・保存
     LAST_PROCESSED_UID = max(new_uids)
+    save_last_uid()
 
 async def send_discord_message(discord_bot: discord.Client, channel_id: int, code: str):
     channel = discord_bot.get_channel(channel_id)
