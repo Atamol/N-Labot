@@ -14,3 +14,4 @@ fonts/
 reservations.db
 
 .env
+last_processed_uid.txt
