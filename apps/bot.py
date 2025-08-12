@@ -1,12 +1,8 @@
-from dotenv import load_dotenv
-load_dotenv()
-
 import os
 import discord
 from discord.ext import tasks
 from discord import app_commands
 import asyncio
-
 import switchbot
 import gmail_detector
 # from reservation import init_reservations
