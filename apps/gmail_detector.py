@@ -19,7 +19,29 @@ CODE_REGEX = re.compile(r"Your\s+verification\s+code\s+is:\s*(\d{6})", re.IGNORE
 # 前回処理済みのUIDを保持
 LAST_PROCESSED_UID = 0
 
+# 起動時に最新のメールUIDを取得し，LAST_PROCESSED_UIDを初期化
+def initialize_last_uid():
+    global LAST_PROCESSED_UID
+    try:
+        with IMAPClient("imap.gmail.com", ssl=True, use_uid=True) as server:
+            server.login(GMAIL_USER, GMAIL_PASS)
+            target_folder = "[Gmail]/すべてのメール"
+            server.select_folder(target_folder)
+            
+            # 存在する最新のメールUIDを取得
+            all_uids = server.search(['ALL'])
+            if all_uids:
+                LAST_PROCESSED_UID = max(all_uids)
+            else:
+                pass
+
+    except Exception:
+        pass
+
 def start_gmail_detector(discord_bot: discord.Client, gmail_channel_id: int):
+    # ループ前にUIDを初期化
+    initialize_last_uid()
+    
     th = threading.Thread(
         target=idle_loop,
         args=(discord_bot, gmail_channel_id),
@@ -53,10 +75,16 @@ def fetch_latest_and_notify(server: IMAPClient, discord_bot: discord.Client, gma
         return
 
     all_uids.sort()
-    # 前回処理済みのUIDより大きいものを新着メールとする
-    new_uids = [uid for uid in all_uids if uid > LAST_PROCESSED_UID]
+
+    # 前回処理済みのUIDをローカル変数に保持
+    current_last_uid = LAST_PROCESSED_UID
+    
+    new_uids = [uid for uid in all_uids if uid > current_last_uid]
     if not new_uids:
         return
+
+    # 通知処理の前に最新のUIDをグローバル変数に記録する
+    LAST_PROCESSED_UID = max(new_uids)
 
     # 最新10件のUIDを取得
     if len(new_uids) > 10:
