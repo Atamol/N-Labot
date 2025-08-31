@@ -52,7 +52,6 @@ class DiscordBot(discord.Client):
         if channel_test:
             await channel_test.send(
                 "再起動しました。"
-                + ("（SwitchBot無効化中）" if DISABLE_SWITCHBOT else "")
             )
         else:
             print("指定したチャンネルが見つかりませんでした。")
