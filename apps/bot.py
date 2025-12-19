@@ -14,7 +14,7 @@ TEST_CHANNEL_ID = int(os.getenv("TEST_CHANNEL_ID", "0"))
 THRESHOLD_TEMP = 5.0
 DISABLE_SWITCHBOT = os.getenv("DISABLE_SWITCHBOT", "0") == "1"
 
-# SwitchBotを使うときだけimport
+# SwitchBotがオンのとき
 if not DISABLE_SWITCHBOT:
     import switchbot
 
@@ -25,22 +25,26 @@ class DiscordBot(discord.Client):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.tree = app_commands.CommandTree(self)
+        self.gmail_detector_started = False
 
-        # 温湿度チェックタスク（SwitchBot無効時は登録しない）
+        # SwitchBot有効時
         if not DISABLE_SWITCHBOT:
             self.check_temperature_task = tasks.loop(minutes=3)(self.check_temperature)
 
     async def on_ready(self):
         print(f"Logged in as {self.user} (ID: {self.user.id})")
 
-        # Gmail検出は常時開始
-        gmail_detector.start_gmail_detector(self, GMAIL_CHANNEL_ID)
+        if not self.gmail_detector_started:
+            gmail_detector.start_gmail_detector(self, GMAIL_CHANNEL_ID)
+            self.gmail_detector_started = True
+            print("Gmail detector started.")
 
-        # SwitchBotが有効なときだけ温度監視タスクを開始
+        # SwitchBot有効時
         if not DISABLE_SWITCHBOT:
-            self.check_temperature_task.start()
+            if not self.check_temperature_task.is_running():
+                 self.check_temperature_task.start()
 
-        # 予約機能を使う場合はコメント解除
+        # 予約機能
         # await init_reservations(self)
 
         # スラッシュコマンド同期
@@ -60,7 +64,7 @@ class DiscordBot(discord.Client):
         if DISABLE_SWITCHBOT:
             return
 
-        # switchbot をローカル参照（将来の切替に強い）
+        # switchbot をローカル参照
         from switchbot import get_meter_status
 
         meter_data = get_meter_status()
@@ -92,7 +96,7 @@ class DiscordBot(discord.Client):
 
 bot = DiscordBot(intents=intents)
 
-# SwitchBot無効時はスラッシュコマンド自体を登録しない
+# SwitchBot有効時
 if not DISABLE_SWITCHBOT:
     @bot.tree.command(name="status", description="現在の温湿度とバッテリーを表示")
     async def meterstatus_command(interaction: discord.Interaction):
