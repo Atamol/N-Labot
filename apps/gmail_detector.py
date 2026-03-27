@@ -13,8 +13,8 @@ import discord
 GMAIL_USER = os.getenv("GMAIL_USER")
 GMAIL_PASS = os.getenv("GMAIL_PASS")
 
-TARGET_SUBJECT = "Bambu Lab Verification Code"
-CODE_REGEX = re.compile(r"Your\s+verification\s+code\s+is:\s*(\d{6})", re.IGNORECASE)
+TARGET_SUBJECT_KEYWORDS = ["bambu", "verification", "code"]
+CODE_REGEX = re.compile(r"verification\s+code[^0-9]*?(\d{6})", re.IGNORECASE | re.DOTALL)
 
 # 前回処理済みのUIDを保持
 LAST_PROCESSED_UID = 0
@@ -100,7 +100,8 @@ def fetch_latest_and_notify(server: IMAPClient, discord_bot: discord.Client, gma
         msg = email.message_from_bytes(raw_email)
 
         subject = decode_str(msg.get("Subject", ""))
-        if TARGET_SUBJECT in subject:
+        subject_lower = subject.lower()
+        if all(kw in subject_lower for kw in TARGET_SUBJECT_KEYWORDS):
             body_text = get_body_text(msg)
             code = extract_code(body_text)
             if code:
