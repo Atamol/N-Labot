@@ -22,6 +22,11 @@ CODE_REGEX = re.compile(r"verification\s+code[^0-9]*?(\d{6})", re.IGNORECASE | r
 
 LAST_PROCESSED_UID = 0
 
+# 直近送信したコードの重複抑止 (30秒以内の同コードはスキップ)
+_LAST_SENT_CODE = None
+_LAST_SENT_AT = 0.0
+_DEDUP_WINDOW = 30.0
+
 def initialize_last_uid():
     global LAST_PROCESSED_UID
     try:
@@ -125,6 +130,14 @@ def fetch_latest_and_notify(server: IMAPClient, discord_bot: discord.Client, gma
         _dispatch_discord_message(discord_bot, gmail_channel_id, code)
 
 def _dispatch_discord_message(discord_bot: discord.Client, channel_id: int, code: str):
+    global _LAST_SENT_CODE, _LAST_SENT_AT
+    now = time.monotonic()
+    if code == _LAST_SENT_CODE and (now - _LAST_SENT_AT) < _DEDUP_WINDOW:
+        log.info("Skip duplicate code: %s", code)
+        return
+    _LAST_SENT_CODE = code
+    _LAST_SENT_AT = now
+
     loop = getattr(discord_bot, "loop", None)
     if loop is None or not loop.is_running():
         log.warning("Discord loop not ready, dropping code: %s", code)
