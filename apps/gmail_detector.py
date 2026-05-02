@@ -139,17 +139,11 @@ async def send_discord_message(discord_bot: discord.Client, channel_id: int, cod
     if channel is None:
         log.warning("Channel %d not found", channel_id)
         return
-
-    delay = 1
-    for attempt in range(3):
-        try:
-            await channel.send(f"Bambu Lab Verification Code: **{code}**")
-            return
-        except Exception:
-            log.exception("Discord send failed (attempt %d)", attempt + 1)
-            await asyncio.sleep(delay)
-            delay *= 2
-    log.error("Gave up sending verification code: %s", code)
+    # 重複送信を避けるためリトライしない (失効したらユーザーが再送する)
+    try:
+        await channel.send(f"Bambu Lab Verification Code: **{code}**")
+    except Exception:
+        log.exception("Discord send failed for code %s", code)
 
 def decode_str(s: str) -> str:
     parts = decode_header(s)
