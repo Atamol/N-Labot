@@ -13,7 +13,6 @@ SWITCHBOT_TOKEN = os.getenv("SWITCHBOT_TOKEN")
 SWITCHBOT_SECRET = os.getenv("SWITCHBOT_SECRET")
 SWITCHBOT_DEVICE_ID = os.getenv("SWITCHBOT_DEVICE_ID")
 
-# 署名付きヘッダを作成
 def make_auth_headers(token: str, secret: str) -> dict:
     t = str(int(time.time() * 1000))
     nonce = uuid.uuid4().hex
@@ -34,7 +33,6 @@ def make_auth_headers(token: str, secret: str) -> dict:
         "Content-Type": "application/json"
     }
 
-# ステータス情報を取得
 def get_meter_status() -> dict:
     if not (SWITCHBOT_TOKEN and SWITCHBOT_SECRET and SWITCHBOT_DEVICE_ID):
         print("SwitchBot関連の環境変数が設定されていません。")

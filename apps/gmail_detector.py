@@ -1,6 +1,8 @@
 import os
 import re
 import time
+import socket
+import logging
 import threading
 import asyncio
 import email
@@ -10,38 +12,44 @@ from imapclient import IMAPClient
 from bs4 import BeautifulSoup
 import discord
 
+log = logging.getLogger(__name__)
+
 GMAIL_USER = os.getenv("GMAIL_USER")
 GMAIL_PASS = os.getenv("GMAIL_PASS")
 
-TARGET_SUBJECT_KEYWORDS = ["bambu", "verification", "code"]
+BAMBU_FROM = "noreply@bambulab.com"
 CODE_REGEX = re.compile(r"verification\s+code[^0-9]*?(\d{6})", re.IGNORECASE | re.DOTALL)
 
-# 前回処理済みのUIDを保持
 LAST_PROCESSED_UID = 0
 
-# 起動時に最新のメールUIDを取得し，LAST_PROCESSED_UIDを初期化
 def initialize_last_uid():
     global LAST_PROCESSED_UID
     try:
         with IMAPClient("imap.gmail.com", ssl=True, use_uid=True) as server:
             server.login(GMAIL_USER, GMAIL_PASS)
             target_folder = "[Gmail]/すべてのメール"
-            server.select_folder(target_folder)
-            
-            # 存在する最新のメールUIDを取得
-            all_uids = server.search(['ALL'])
-            if all_uids:
-                LAST_PROCESSED_UID = max(all_uids)
-            else:
-                pass
-
+            status = server.folder_status(target_folder, ['UIDNEXT'])
+            uidnext = status.get(b'UIDNEXT')
+            if uidnext:
+                LAST_PROCESSED_UID = uidnext - 1
     except Exception:
-        pass
+        log.exception("initialize_last_uid failed")
+
+def _enable_keepalive(server: IMAPClient):
+    # ルーター，NATの沈黙切断を防ぐ
+    sock = server.socket()
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    for opt, val in (
+        ("TCP_KEEPIDLE", 60),
+        ("TCP_KEEPINTVL", 30),
+        ("TCP_KEEPCNT", 4),
+    ):
+        if hasattr(socket, opt):
+            sock.setsockopt(socket.IPPROTO_TCP, getattr(socket, opt), val)
 
 def start_gmail_detector(discord_bot: discord.Client, gmail_channel_id: int):
-    # ループ前にUIDを初期化
     initialize_last_uid()
-    
+
     th = threading.Thread(
         target=idle_loop,
         args=(discord_bot, gmail_channel_id),
@@ -50,74 +58,98 @@ def start_gmail_detector(discord_bot: discord.Client, gmail_channel_id: int):
     th.start()
 
 def idle_loop(discord_bot: discord.Client, gmail_channel_id: int):
-    global LAST_PROCESSED_UID
+    target_folder = "[Gmail]/すべてのメール"
+    # NATのアイドル切断を避けるため短めに
+    IDLE_TIMEOUT = 5 * 60
+    backoff = 5
+    BACKOFF_MAX = 300
+
     while True:
         try:
-            with IMAPClient("imap.gmail.com", ssl=True, use_uid=True) as server:
-                # ログイン
+            with IMAPClient("imap.gmail.com", ssl=True, use_uid=True, timeout=60) as server:
                 server.login(GMAIL_USER, GMAIL_PASS)
-
-                # フォルダ選択
-                target_folder = "[Gmail]/すべてのメール"
                 server.select_folder(target_folder)
+                _enable_keepalive(server)
 
-                # 新着メールの検出と処理
+                # 再接続後の取りこぼしを拾う
                 fetch_latest_and_notify(server, discord_bot, gmail_channel_id)
-        except Exception:
-            pass
 
-        time.sleep(3)
+                # 接続維持できたのでバックオフ解除
+                backoff = 5
+
+                while True:
+                    server.idle()
+                    try:
+                        responses = server.idle_check(timeout=IDLE_TIMEOUT)
+                    finally:
+                        server.idle_done()
+
+                    if not responses:
+                        # タイムアウト時はNOOPで生存確認して再IDLE
+                        server.noop()
+                        continue
+
+                    if any(len(r) >= 2 and r[1] in (b'EXISTS', b'RECENT') for r in responses):
+                        fetch_latest_and_notify(server, discord_bot, gmail_channel_id)
+        except Exception:
+            log.exception("Gmail idle loop crashed, reconnecting in %ds", backoff)
+            time.sleep(backoff)
+            backoff = min(backoff * 2, BACKOFF_MAX)
 
 def fetch_latest_and_notify(server: IMAPClient, discord_bot: discord.Client, gmail_channel_id: int):
     global LAST_PROCESSED_UID
-    all_uids = server.search(['ALL'])
-    if not all_uids:
+    # 送信者で絞ってからサーバ側に差分だけ返してもらう
+    matched = server.search(['FROM', BAMBU_FROM, 'UID', f'{LAST_PROCESSED_UID + 1}:*'])
+    matched = [uid for uid in matched if uid > LAST_PROCESSED_UID]
+
+    # 対象外メールが届いた場合もUIDを前進させる
+    boundary = server.search(['UID', f'{LAST_PROCESSED_UID + 1}:*'])
+    boundary = [uid for uid in boundary if uid > LAST_PROCESSED_UID]
+    if boundary:
+        LAST_PROCESSED_UID = max(boundary)
+
+    if not matched:
         return
 
-    all_uids.sort()
-
-    # 前回処理済みのUIDをローカル変数に保持
-    current_last_uid = LAST_PROCESSED_UID
-    
-    new_uids = [uid for uid in all_uids if uid > current_last_uid]
-    if not new_uids:
+    matched.sort()
+    # 直近1通だけ処理 (古いコードは無効のため)
+    uid = matched[-1]
+    msg_info = server.fetch(uid, ['BODY[]']).get(uid)
+    if not msg_info or (b'BODY[]' not in msg_info):
         return
 
-    # 通知処理の前に最新のUIDをグローバル変数に記録する
-    LAST_PROCESSED_UID = max(new_uids)
+    msg = email.message_from_bytes(msg_info[b'BODY[]'])
+    body_text = get_body_text(msg)
+    code = extract_code(body_text)
+    if code:
+        _dispatch_discord_message(discord_bot, gmail_channel_id, code)
 
-    # 最新10件のUIDを取得
-    if len(new_uids) > 10:
-        new_uids = new_uids[-10:]
-
-    # 新しい順に処理
-    for uid in reversed(new_uids):
-        msg_info = server.fetch(uid, ['BODY[]']).get(uid)
-        if not msg_info or (b'BODY[]' not in msg_info):
-            continue
-
-        raw_email = msg_info[b'BODY[]']
-        msg = email.message_from_bytes(raw_email)
-
-        subject = decode_str(msg.get("Subject", ""))
-        subject_lower = subject.lower()
-        if all(kw in subject_lower for kw in TARGET_SUBJECT_KEYWORDS):
-            body_text = get_body_text(msg)
-            code = extract_code(body_text)
-            if code:
-                discord_bot.loop.call_soon_threadsafe(
-                    asyncio.create_task,
-                    send_discord_message(discord_bot, gmail_channel_id, code)
-                )
-                break
-
-    # 最新のUIDを記録
-    LAST_PROCESSED_UID = max(new_uids)
+def _dispatch_discord_message(discord_bot: discord.Client, channel_id: int, code: str):
+    loop = getattr(discord_bot, "loop", None)
+    if loop is None or not loop.is_running():
+        log.warning("Discord loop not ready, dropping code: %s", code)
+        return
+    asyncio.run_coroutine_threadsafe(
+        send_discord_message(discord_bot, channel_id, code),
+        loop,
+    )
 
 async def send_discord_message(discord_bot: discord.Client, channel_id: int, code: str):
     channel = discord_bot.get_channel(channel_id)
-    if channel:
-        await channel.send(f"Bambu Lab Verification Code: **{code}**")
+    if channel is None:
+        log.warning("Channel %d not found", channel_id)
+        return
+
+    delay = 1
+    for attempt in range(3):
+        try:
+            await channel.send(f"Bambu Lab Verification Code: **{code}**")
+            return
+        except Exception:
+            log.exception("Discord send failed (attempt %d)", attempt + 1)
+            await asyncio.sleep(delay)
+            delay *= 2
+    log.error("Gave up sending verification code: %s", code)
 
 def decode_str(s: str) -> str:
     parts = decode_header(s)
