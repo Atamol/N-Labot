@@ -12,6 +12,7 @@ from imapclient import IMAPClient
 from bs4 import BeautifulSoup
 import discord
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(threadName)s] %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger(__name__)
 
 GMAIL_USER = os.getenv("GMAIL_USER")
@@ -52,13 +53,22 @@ def _enable_keepalive(server: IMAPClient):
         if hasattr(socket, opt):
             sock.setsockopt(socket.IPPROTO_TCP, getattr(socket, opt), val)
 
+_started = False
+
 def start_gmail_detector(discord_bot: discord.Client, gmail_channel_id: int):
+    global _started
+    if _started:
+        log.warning("start_gmail_detector called twice, ignoring")
+        return
+    _started = True
+    log.info("start_gmail_detector invoked")
     initialize_last_uid()
 
     th = threading.Thread(
         target=idle_loop,
         args=(discord_bot, gmail_channel_id),
-        daemon=True
+        daemon=True,
+        name="gmail-idle",
     )
     th.start()
 
@@ -103,6 +113,7 @@ def idle_loop(discord_bot: discord.Client, gmail_channel_id: int):
 
 def fetch_latest_and_notify(server: IMAPClient, discord_bot: discord.Client, gmail_channel_id: int):
     global LAST_PROCESSED_UID
+    log.info("fetch start, LAST_PROCESSED_UID=%d", LAST_PROCESSED_UID)
     # 送信者で絞ってからサーバ側に差分だけ返してもらう
     matched = server.search(['FROM', BAMBU_FROM, 'UID', f'{LAST_PROCESSED_UID + 1}:*'])
     matched = [uid for uid in matched if uid > LAST_PROCESSED_UID]
@@ -110,6 +121,7 @@ def fetch_latest_and_notify(server: IMAPClient, discord_bot: discord.Client, gma
     # 対象外メールが届いた場合もUIDを前進させる
     boundary = server.search(['UID', f'{LAST_PROCESSED_UID + 1}:*'])
     boundary = [uid for uid in boundary if uid > LAST_PROCESSED_UID]
+    log.info("matched=%s boundary=%s", matched, boundary)
     if boundary:
         LAST_PROCESSED_UID = max(boundary)
 
@@ -126,12 +138,14 @@ def fetch_latest_and_notify(server: IMAPClient, discord_bot: discord.Client, gma
     msg = email.message_from_bytes(msg_info[b'BODY[]'])
     body_text = get_body_text(msg)
     code = extract_code(body_text)
+    log.info("extracted code=%s for uid=%d", code, uid)
     if code:
         _dispatch_discord_message(discord_bot, gmail_channel_id, code)
 
 def _dispatch_discord_message(discord_bot: discord.Client, channel_id: int, code: str):
     global _LAST_SENT_CODE, _LAST_SENT_AT
     now = time.monotonic()
+    log.info("dispatch called: code=%s last=%s elapsed=%.2f", code, _LAST_SENT_CODE, now - _LAST_SENT_AT)
     if code == _LAST_SENT_CODE and (now - _LAST_SENT_AT) < _DEDUP_WINDOW:
         log.info("Skip duplicate code: %s", code)
         return
