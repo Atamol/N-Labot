@@ -18,8 +18,11 @@ log = logging.getLogger(__name__)
 GMAIL_USER = os.getenv("GMAIL_USER")
 GMAIL_PASS = os.getenv("GMAIL_PASS")
 
-BAMBU_FROM = "noreply@bambulab.com"
+BAMBU_SENDER_REGEX = re.compile(r"@(?:[\w-]+\.)*bambulab\.(?:com|net)$", re.IGNORECASE)
+BAMBU_SUBJECT_REGEX = re.compile(r"verification|認証コード|確認コード", re.IGNORECASE)
+
 CODE_REGEX = re.compile(r"verification\s+code[^0-9]*?(\d{6})", re.IGNORECASE | re.DOTALL)
+CODE_FALLBACK_REGEX = re.compile(r"(?<!\d)(\d{6})(?!\d)")
 
 LAST_PROCESSED_UID = 0
 
@@ -114,21 +117,28 @@ def idle_loop(discord_bot: discord.Client, gmail_channel_id: int):
 def fetch_latest_and_notify(server: IMAPClient, discord_bot: discord.Client, gmail_channel_id: int):
     global LAST_PROCESSED_UID
     log.info("fetch start, LAST_PROCESSED_UID=%d", LAST_PROCESSED_UID)
-    # 送信者で絞ってからサーバ側に差分だけ返してもらう
-    matched = server.search(['FROM', BAMBU_FROM, 'UID', f'{LAST_PROCESSED_UID + 1}:*'])
-    matched = [uid for uid in matched if uid > LAST_PROCESSED_UID]
 
-    # 対象外メールが届いた場合もUIDを前進させる
-    boundary = server.search(['UID', f'{LAST_PROCESSED_UID + 1}:*'])
-    boundary = [uid for uid in boundary if uid > LAST_PROCESSED_UID]
-    log.info("matched=%s boundary=%s", matched, boundary)
-    if boundary:
-        LAST_PROCESSED_UID = max(boundary)
+    new_uids = sorted(
+        uid for uid in server.search(['UID', f'{LAST_PROCESSED_UID + 1}:*'])
+        if uid > LAST_PROCESSED_UID
+    )
+    if not new_uids:
+        log.info("no new mail")
+        return
+
+    matched = []
+    for uid, data in sorted(server.fetch(new_uids, ['ENVELOPE']).items()):
+        sender, subject = summarize_envelope(data.get(b'ENVELOPE'))
+        hit = bool(BAMBU_SENDER_REGEX.search(sender) or BAMBU_SUBJECT_REGEX.search(subject))
+        log.info("uid=%d from=%s subject=%r bambu=%s", uid, sender, subject, hit)
+        if hit:
+            matched.append(uid)
+
+    LAST_PROCESSED_UID = max(new_uids)
 
     if not matched:
         return
 
-    matched.sort()
     # 直近1通だけ処理 (古いコードは無効のため)
     uid = matched[-1]
     msg_info = server.fetch(uid, ['BODY[]']).get(uid)
@@ -185,6 +195,18 @@ def decode_str(s: str) -> str:
             decoded.append(text)
     return "".join(decoded)
 
+def summarize_envelope(env) -> tuple[str, str]:
+    if env is None:
+        return "", ""
+    sender = ""
+    if env.from_:
+        addr = env.from_[0]
+        mailbox = (addr.mailbox or b"").decode(errors="replace")
+        host = (addr.host or b"").decode(errors="replace")
+        sender = f"{mailbox}@{host}"
+    subject = decode_str(env.subject.decode(errors="replace")) if env.subject else ""
+    return sender, subject
+
 def get_body_text(msg: email.message.Message) -> str:
     texts = []
     if msg.is_multipart():
@@ -202,8 +224,9 @@ def get_body_text(msg: email.message.Message) -> str:
 
 def extract_code(html_text: str) -> str:
     soup = BeautifulSoup(html_text, "html.parser")
-    text = soup.get_text()
-    match = CODE_REGEX.search(text)
+    text = soup.get_text(separator=" ")
+    match = CODE_REGEX.search(text) or CODE_FALLBACK_REGEX.search(text)
     if match:
         return match.group(1)
+    log.warning("no code found in body: %r", text[:300])
     return ""
